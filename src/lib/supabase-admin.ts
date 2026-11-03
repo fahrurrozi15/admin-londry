@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { OperationalOrder, PaymentRecord, OperationalLog, OrderStatus, PaymentMethod } from '@/types/admin';
 import { SAMPLE_OPERATIONAL_ORDERS, SAMPLE_LOGS } from './mock-admin-data';
 
+// 1. Supabase Admin (Database 2: db_admin)
 const adminSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const adminSupabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
@@ -15,15 +16,25 @@ export const adminSupabase = isAdminSupabaseConfigured
   ? createClient(adminSupabaseUrl, adminSupabaseKey)
   : null;
 
-// Fallback client Supabase (jika FDW belum di-setup di database)
+// 2. Supabase Client (Database 1: db_client - direct integration fallback)
 const clientSupabaseUrl = process.env.NEXT_PUBLIC_CLIENT_SUPABASE_URL || '';
-const clientSupabaseKey = process.env.NEXT_PUBLIC_CLIENT_SUPABASE_ANON_KEY || '';
-export const clientSupabaseFallback = Boolean(clientSupabaseUrl && clientSupabaseKey)
+const clientSupabaseKey = process.env.CLIENT_SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_CLIENT_SUPABASE_ANON_KEY || '';
+
+export const isClientSupabaseConfigured = Boolean(
+  clientSupabaseUrl &&
+  clientSupabaseKey &&
+  !clientSupabaseUrl.includes('your-client-project')
+);
+
+export const clientSupabase = isClientSupabaseConfigured
   ? createClient(clientSupabaseUrl, clientSupabaseKey)
   : null;
 
 /**
- * Mengambil seluruh pesanan operasional (Mengutamakan view FDW: v_operational_orders)
+ * Mengambil seluruh pesanan operasional
+ * Jalur 1: Membaca dari PostgreSQL FDW View `v_operational_orders` di db_admin
+ * Jalur 2: Integrasi dual-client langsung (query client_orders di DB 1 + payments di DB 2)
+ * Jalur 3: Fallback ke mock/local
  */
 export async function getOperationalOrders(): Promise<OperationalOrder[]> {
   // 1. Coba dari view FDW di db_admin
@@ -38,45 +49,60 @@ export async function getOperationalOrders(): Promise<OperationalOrder[]> {
         return data as OperationalOrder[];
       }
     } catch (e) {
-      console.warn('View FDW v_operational_orders belum aktif, mencoba metode fallback:', e);
+      console.warn('View FDW v_operational_orders belum aktif, menggunakan integrasi dual-client API:', e);
     }
   }
 
-  // 2. Fallback: LocalStorage gabungan (jika dijalankan lokal browser)
+  // 2. Integrasi Dual-Database API (Tarik client_orders dari DB1 & payments dari DB2)
+  if (clientSupabase && adminSupabase) {
+    try {
+      const [{ data: clientOrders, error: errClient }, { data: payments, error: errPayments }] = await Promise.all([
+        clientSupabase.from('client_orders').select('*').order('created_at', { ascending: false }),
+        adminSupabase.from('payments').select('*'),
+      ]);
+
+      if (!errClient && clientOrders && clientOrders.length > 0) {
+        const paymentMap = new Map<string, any>();
+        if (payments) {
+          payments.forEach((p) => paymentMap.set(p.order_code, p));
+        }
+
+        const integrated: OperationalOrder[] = clientOrders.map((co: any) => {
+          const pay = paymentMap.get(co.order_code);
+          return {
+            client_order_id: co.id,
+            order_code: co.order_code,
+            customer_name: co.customer_name,
+            customer_phone: co.customer_phone,
+            customer_address: co.customer_address,
+            delivery_type: co.delivery_type,
+            service_name: co.service_name,
+            estimated_weight_kg: co.estimated_weight_kg || 0,
+            customer_notes: co.customer_notes,
+            order_status: co.status,
+            order_created_at: co.created_at,
+            payment_id: pay?.id,
+            payment_invoice_no: pay?.payment_invoice_no,
+            actual_weight_kg: pay?.actual_weight_kg,
+            total_amount: pay?.total_amount,
+            payment_status: pay?.payment_status || 'UNPAID',
+            payment_method: pay?.payment_method,
+            paid_at: pay?.paid_at,
+          };
+        });
+
+        return integrated;
+      }
+    } catch (err) {
+      console.error('Error saat fetch dual-database API:', err);
+    }
+  }
+
+  // 3. Fallback LocalStorage (bila offline)
   if (typeof window !== 'undefined') {
     const localSaved = localStorage.getItem('local_operational_orders');
     if (localSaved) {
       return JSON.parse(localSaved);
-    }
-
-    // Ambil order baru dari client app localStorage jika ada
-    const clientAppOrders = localStorage.getItem('local_client_orders');
-    if (clientAppOrders) {
-      const parsedClient = JSON.parse(clientAppOrders);
-      const combined: OperationalOrder[] = parsedClient.map((co: any) => ({
-        client_order_id: co.id,
-        order_code: co.order_code,
-        customer_name: co.customer_name,
-        customer_phone: co.customer_phone,
-        customer_address: co.customer_address,
-        delivery_type: co.delivery_type,
-        service_name: co.service_name,
-        estimated_weight_kg: co.estimated_weight_kg || 0,
-        customer_notes: co.customer_notes,
-        order_status: co.status,
-        order_created_at: co.created_at,
-        payment_status: 'UNPAID',
-      }));
-
-      // Gabungkan dengan sample
-      const existingCodes = new Set(combined.map((c) => c.order_code));
-      for (const s of SAMPLE_OPERATIONAL_ORDERS) {
-        if (!existingCodes.has(s.order_code)) {
-          combined.push(s);
-        }
-      }
-      localStorage.setItem('local_operational_orders', JSON.stringify(combined));
-      return combined;
     }
   }
 
@@ -85,16 +111,28 @@ export async function getOperationalOrders(): Promise<OperationalOrder[]> {
 
 /**
  * 1-Click Update Status Cucian
- * Di arsitektur FDW: Mengupdate status di db_client (via foreign table atau direct)
- * Dan mencatat audit trail di tabel operational_logs (db_admin).
+ * - Mengubah status di `client_orders` (db_client)
+ * - Merekam audit log di `operational_logs` (db_admin)
  */
 export async function updateOrderStatus(
   orderCode: string,
   newStatus: OrderStatus,
   adminUsername: string = 'kasir1'
 ): Promise<{ success: boolean; message?: string }> {
-  // Simpan log audit ke db_admin
-  if (isAdminSupabaseConfigured && adminSupabase) {
+  // Update status di DB 1 (Client DB)
+  if (clientSupabase) {
+    try {
+      await clientSupabase
+        .from('client_orders')
+        .update({ status: newStatus, updated_at: new Date().toISOString() })
+        .eq('order_code', orderCode);
+    } catch (e) {
+      console.warn('Gagal update client_orders via direct client:', e);
+    }
+  }
+
+  // Rekam Audit Trail ke DB 2 (Admin DB)
+  if (adminSupabase) {
     try {
       await adminSupabase.from('operational_logs').insert([
         {
@@ -105,11 +143,11 @@ export async function updateOrderStatus(
         },
       ]);
     } catch (e) {
-      console.warn('Gagal mencatat audit log ke Supabase:', e);
+      console.warn('Gagal mencatat audit log ke DB Admin:', e);
     }
   }
 
-  // Update status di LocalStorage fallback
+  // Update juga di localStorage fallback
   if (typeof window !== 'undefined') {
     const orders: OperationalOrder[] = JSON.parse(
       localStorage.getItem('local_operational_orders') || JSON.stringify(SAMPLE_OPERATIONAL_ORDERS)
@@ -119,36 +157,16 @@ export async function updateOrderStatus(
       target.order_status = newStatus;
       localStorage.setItem('local_operational_orders', JSON.stringify(orders));
     }
-
-    // Update juga di localStorage client jika ada
-    const clientOrders = JSON.parse(localStorage.getItem('local_client_orders') || '[]');
-    const targetClient = clientOrders.find((o: any) => o.order_code === orderCode);
-    if (targetClient) {
-      targetClient.status = newStatus;
-      localStorage.setItem('local_client_orders', JSON.stringify(clientOrders));
-    }
-
-    // Catat local audit log
-    const logs: OperationalLog[] = JSON.parse(
-      localStorage.getItem('local_operational_logs') || JSON.stringify(SAMPLE_LOGS)
-    );
-    logs.unshift({
-      id: `log-${Date.now()}`,
-      username: adminUsername,
-      action_type: 'STATUS_CHANGE',
-      target_order_code: orderCode,
-      details: { new_status: newStatus },
-      created_at: new Date().toISOString(),
-    });
-    localStorage.setItem('local_operational_logs', JSON.stringify(logs));
   }
 
   return { success: true };
 }
 
 /**
- * Modul Kasir POS: Menyimpan Berat Timbangan Aktual & Proses Pembayaran
- * Data tersimpan di tabel payments di db_admin!
+ * Modul Kasir POS: Timbangan Aktual & Transaksi Pembayaran
+ * - Menyimpan data tagihan ke tabel `payments` (db_admin)
+ * - Mengupdate status cucian ke `IN_LAUNDRY` jika masih order baru
+ * - Merekam log transaksi ke `operational_logs` (db_admin)
  */
 export async function processWeightAndPayment(payload: {
   orderCode: string;
@@ -168,7 +186,8 @@ export async function processWeightAndPayment(payload: {
   const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const randomInv = `INV-${todayStr}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-  if (isAdminSupabaseConfigured && adminSupabase) {
+  // Simpan tagihan ke DB 2 (Admin DB)
+  if (adminSupabase) {
     try {
       const { data, error } = await adminSupabase
         .from('payments')
@@ -193,7 +212,7 @@ export async function processWeightAndPayment(payload: {
         .select()
         .single();
 
-      // Catat log
+      // Rekam Audit Trail
       await adminSupabase.from('operational_logs').insert([
         {
           username: payload.adminUsername,
@@ -203,6 +222,14 @@ export async function processWeightAndPayment(payload: {
         },
       ]);
 
+      // Update status di DB 1 menjadi 'IN_LAUNDRY' (Tiba di Outlet & Ditimbang)
+      if (clientSupabase) {
+        await clientSupabase
+          .from('client_orders')
+          .update({ status: 'IN_LAUNDRY', updated_at: new Date().toISOString() })
+          .eq('order_code', payload.orderCode);
+      }
+
       if (!error && data) {
         return { success: true, invoiceNo: data.payment_invoice_no };
       }
@@ -211,7 +238,7 @@ export async function processWeightAndPayment(payload: {
     }
   }
 
-  // Fallback LocalStorage
+  // Fallback Local
   if (typeof window !== 'undefined') {
     const orders: OperationalOrder[] = JSON.parse(
       localStorage.getItem('local_operational_orders') || JSON.stringify(SAMPLE_OPERATIONAL_ORDERS)
@@ -224,31 +251,19 @@ export async function processWeightAndPayment(payload: {
       target.payment_status = 'PAID';
       target.payment_method = payload.paymentMethod;
       target.paid_at = new Date().toISOString();
-      if (target.order_status === 'ORDER_RECEIVED' || target.order_status === 'COURIER_PICKUP') {
-        target.order_status = 'IN_LAUNDRY';
-      }
+      target.order_status = 'IN_LAUNDRY';
       localStorage.setItem('local_operational_orders', JSON.stringify(orders));
     }
-
-    const logs: OperationalLog[] = JSON.parse(
-      localStorage.getItem('local_operational_logs') || JSON.stringify(SAMPLE_LOGS)
-    );
-    logs.unshift({
-      id: `log-${Date.now()}`,
-      username: payload.adminUsername,
-      action_type: 'PAYMENT_PROCESSED',
-      target_order_code: payload.orderCode,
-      details: { invoice: randomInv, weight: payload.actualWeightKg, total: totalAmount },
-      created_at: new Date().toISOString(),
-    });
-    localStorage.setItem('local_operational_logs', JSON.stringify(logs));
   }
 
   return { success: true, invoiceNo: randomInv };
 }
 
+/**
+ * Mengambil riwayat audit trail dari `operational_logs` di db_admin
+ */
 export async function getOperationalLogs(): Promise<OperationalLog[]> {
-  if (isAdminSupabaseConfigured && adminSupabase) {
+  if (adminSupabase) {
     try {
       const { data, error } = await adminSupabase
         .from('operational_logs')
