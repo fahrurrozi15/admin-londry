@@ -1,4 +1,4 @@
-import { AdminUser, OperationalOrder, PaymentRecord, OperationalLog } from '@/types/admin';
+import { AdminUser, OperationalOrder, OperationalLog, ServicePackage, QRISSetting } from '@/types/admin';
 
 export const SAMPLE_ADMINS: AdminUser[] = [
   {
@@ -127,3 +127,80 @@ export const SAMPLE_LOGS: OperationalLog[] = [
     created_at: '2026-11-03T11:30:00.000Z',
   },
 ];
+
+export const SAMPLE_SERVICES: ServicePackage[] = [
+  {
+    id: 'sp-1',
+    name: 'Cuci Komplit Reguler',
+    slug: 'cuci-komplit-reguler',
+    description: 'Cuci bersih, pengeringan higienis, dan setrika uap rapi wangi tahan lama.',
+    service_type: 'kiloan',
+    price_per_unit: 8000,
+    unit_name: 'KG',
+    estimated_duration_hours: 48,
+    is_active: true,
+  },
+  {
+    id: 'sp-2',
+    name: 'Cuci Kering Lipat',
+    slug: 'cuci-kering-lipat',
+    description: 'Cuci dan pengeringan mesin komersial tanpa setrika, dilipat rapi.',
+    service_type: 'kiloan',
+    price_per_unit: 6000,
+    unit_name: 'KG',
+    estimated_duration_hours: 24,
+    is_active: true,
+  },
+  {
+    id: 'sp-3',
+    name: 'Setrika Uap Kilat',
+    slug: 'setrika-uap-kilat',
+    description: 'Setrika uap cepat khusus pakaian bersih dengan pelindung hanger.',
+    service_type: 'kiloan',
+    price_per_unit: 5000,
+    unit_name: 'KG',
+    estimated_duration_hours: 24,
+    is_active: true,
+  },
+  {
+    id: 'sp-4',
+    name: 'Express Same-Day',
+    slug: 'express-same-day',
+    description: 'Layanan prioritas cepat selesai dalam waktu 6-8 jam di hari yang sama.',
+    service_type: 'express',
+    price_per_unit: 15000,
+    unit_name: 'KG',
+    estimated_duration_hours: 8,
+    is_active: true,
+  },
+  {
+    id: 'sp-5',
+    name: 'Jas & Blazer Formal',
+    slug: 'jas-blazer',
+    description: 'Dry clean khusus pakaian formal dengan garmen pelindung anti debu.',
+    service_type: 'satuan',
+    price_per_unit: 25000,
+    unit_name: 'PCS',
+    estimated_duration_hours: 48,
+    is_active: true,
+  },
+  {
+    id: 'sp-6',
+    name: 'Bed Cover King/Queen',
+    slug: 'bed-cover-king-queen',
+    description: 'Pembersihan mendalam untuk bed cover ukuran tebal dan duvet.',
+    service_type: 'satuan',
+    price_per_unit: 35000,
+    unit_name: 'PCS',
+    estimated_duration_hours: 48,
+    is_active: true,
+  },
+];
+
+export const DEFAULT_QRIS_SETTINGS: QRISSetting = {
+  merchant_name: 'AURA LAUNDRY OFFICIAL',
+  image_url: 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=00020101021226600016ID.CO.SHOPEE.WWW01189360091800000000000215ID10203040506010303UME51440014ID.CO.QRIS.WWW0215ID10203040506010303UME5204581253033605802ID5921AURA%20LAUNDRY%20OFFICIAL6007JAKARTA61051216062070703A0163041A2B',
+  nmid: 'ID102030405060',
+  info: 'Scan QRIS menggunakan BCA Mobile, GoPay, OVO, Dana, ShopeePay, Mandiri Livin, dll.',
+  updated_at: new Date().toISOString(),
+};

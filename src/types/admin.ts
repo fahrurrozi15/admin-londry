@@ -28,6 +28,7 @@ export interface PaymentRecord {
   total_amount: number;
   payment_status: PaymentStatus;
   payment_method: PaymentMethod;
+  payment_proof_url?: string;
   cashier_id?: string;
   paid_at?: string;
   notes?: string;
@@ -55,6 +56,8 @@ export interface OperationalOrder {
   delivery_type: string;
   service_name: string;
   estimated_weight_kg: number;
+  price_per_unit?: number;  // Tarif layanan (dinamis per paket)
+  unit_name?: string;       // KG atau PCS
   customer_notes?: string;
   order_status: OrderStatus;
   order_created_at: string;
@@ -63,9 +66,11 @@ export interface OperationalOrder {
   payment_id?: string;
   payment_invoice_no?: string;
   actual_weight_kg?: number;
+  piece_count?: number;
   total_amount?: number;
   payment_status: PaymentStatus;
   payment_method?: PaymentMethod;
+  payment_proof_url?: string;
   paid_at?: string;
 }
 
@@ -77,4 +82,27 @@ export interface OperationalLog {
   target_order_code: string;
   details?: Record<string, unknown>;
   created_at: string;
+}
+
+export type ServiceType = 'kiloan' | 'satuan' | 'express';
+
+export interface ServicePackage {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  service_type: ServiceType;
+  price_per_unit: number;
+  unit_name: string;
+  estimated_duration_hours: number;
+  is_active: boolean;
+  created_at?: string;
+}
+
+export interface QRISSetting {
+  merchant_name: string;
+  image_url: string;
+  nmid?: string;
+  info?: string;
+  updated_at?: string;
 }
